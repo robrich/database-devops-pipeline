@@ -1,0 +1,8 @@
+*.sdcs
+*.txt
+*.failed
+bin
+obj
+*.user
+*.suo
+.vs

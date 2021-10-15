@@ -1,0 +1,95 @@
+name: Build Database Interim
+
+# This is an interim step from on-prem build script to GitHub Actions build
+
+on:
+#  push:
+#    branches:
+#    - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v2
+
+      - name: create data image
+        id: create-image
+        uses: red-gate/create-spawn-data-image/@v1
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataImageYaml: spawn/empty-mssql.yaml
+          lifetime: '10m'
+
+      - name: create data container
+        id: create-container
+        uses: red-gate/create-spawn-data-container/@v1
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataImage: ${{ steps.create-image.outputs.dataImageName }}
+          lifetime: '10m'
+
+      - name: build fake database and test it
+        env:
+          DB_HOST: ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }}
+          DB_USERNAME: ${{ steps.create-container.outputs.dataContainerUsername }}
+          DB_PASSWORD: ${{ steps.create-container.outputs.dataContainerPassword }}
+        run: |
+
+          echo "=============================================="
+          echo "create test database"
+
+          # sqlcmd is installed on the runner, so could do `sqlcmd -S $DB_HOST ...`
+          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
+
+          echo "=============================================="
+          echo "migrate it into place"
+
+          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
+
+          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
+
+          echo "=============================================="
+          echo "version assets"
+
+          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
+          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -b -Q "UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+
+          echo "=============================================="
+          echo "run integration tests"
+
+          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
+
+          docker build -t app-tests app-tests
+          docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=$DB_HOST;Database=Todos;User ID=$DB_USERNAME;Password=$DB_PASSWORD;" app-tests
+
+          echo "=============================================="
+          echo "deploy"
+
+          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
+
+          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
+
+          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
+          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -b -Q "UPDATE dbo.Setting SET Value = '$(git rev-parse --short HEAD)' WHERE Name = 'Git Hash';"
+
+      - name: delete data container
+        uses: red-gate/delete-spawn-data-container/@v1
+        if: always()
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataContainer: ${{ steps.create-container.outputs.dataContainerName }}
+
+      - name: delete data image
+        uses: red-gate/delete-spawn-data-image/@v1
+        if: always()
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataImage: ${{ steps.create-image.outputs.dataImageName }}
