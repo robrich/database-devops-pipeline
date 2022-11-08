@@ -1,0 +1,107 @@
+name: Migrations-based Database DevOps Pipeline
+
+on:
+# commented out for demo purposes:
+#  push:
+#    branches:
+#    - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - uses: actions/checkout@v2
+
+      - name: create data image
+        id: create-image
+        uses: red-gate/create-spawn-data-image/@v1
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataImageYaml: spawn/empty-mssql.yaml
+          lifetime: '10m'
+          tags: --name=${{ github.sha }}
+
+      - name: create data container
+        id: create-container
+        uses: red-gate/create-spawn-data-container/@v1
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataImage: ${{ steps.create-image.outputs.dataImageName }}
+          lifetime: '10m'
+
+      - name: Create test database
+        uses: docker://mcr.microsoft.com/mssql-tools
+        with:
+          entrypoint: /opt/mssql-tools/bin/sqlcmd
+          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
+
+      # migrate test database from empty to current version
+
+      - uses: joshuaavalon/flyway-action@v1
+        with:
+          url: jdbc:jtds:sqlserver://${{ steps.create-container.outputs.dataContainerHost }}:${{ steps.create-container.outputs.dataContainerPort }}/Todos;ssl=request
+          user: ${{ steps.create-container.outputs.dataContainerUsername }}
+          password: ${{ steps.create-container.outputs.dataContainerPassword }}
+          locations: filesystem:./migrations-based/sql
+
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=date::$(date +'%Y-%m-%d')"
+
+      - name: Version assets
+        uses: docker://mcr.microsoft.com/mssql-tools
+        with:
+          entrypoint: /opt/mssql-tools/bin/sqlcmd
+          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+
+      # run app tests against database
+
+      - name: Run integration queries
+        uses: docker://mcr.microsoft.com/mssql-tools
+        with:
+          entrypoint: /opt/mssql-tools/bin/sqlcmd
+          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
+
+      - name: Build and test app
+        run: |
+          docker build -t app-tests app-tests
+          docker run -e "ConnectionStrings__DatabaseDevOps=Server=${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }};Database=Todos;User ID=${{ steps.create-container.outputs.dataContainerUsername }};Password=${{ steps.create-container.outputs.dataContainerPassword }};" app-tests
+
+      # build succeeded!
+      # deploy to target server
+
+      - uses: joshuaavalon/flyway-action@v1
+        with:
+          url: jdbc:jtds:sqlserver://${{ secrets.DEPLOYDB_SERVER }}/${{ secrets.DEPLOYDB_DATABASE }};ssl=request
+          user: ${{ secrets.DEPLOYDB_USERNAME }}
+          password: ${{ secrets.DEPLOYDB_PASSWORD }}
+          locations: filesystem:./migrations-based/sql
+
+      - name: Deploy version details
+        uses: docker://mcr.microsoft.com/mssql-tools
+        with:
+          entrypoint: /opt/mssql-tools/bin/sqlcmd
+          args: -S ${{ secrets.DEPLOYDB_SERVER }} -U ${{ secrets.DEPLOYDB_USERNAME }} -P ${{ secrets.DEPLOYDB_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+
+      # cleanup
+
+      - name: delete data container
+        uses: red-gate/delete-spawn-data-container/@v1
+        if: always()
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataContainer: ${{ steps.create-container.outputs.dataContainerName }}
+
+      - name: delete data image
+        uses: red-gate/delete-spawn-data-image/@v1
+        if: always()
+        env:
+          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+        with:
+          dataImage: ${{ steps.create-image.outputs.dataImageName }}

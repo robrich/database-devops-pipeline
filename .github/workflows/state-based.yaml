@@ -1,9 +1,10 @@
-name: Build Database
+name: State-based Database DevOps Pipeline
 
 on:
-  push:
-    branches:
-    - main
+# commented out for demo purposes:
+#  push:
+#    branches:
+#    - main
   workflow_dispatch:
 
 jobs:
@@ -13,8 +14,6 @@ jobs:
     steps:
 
       - uses: actions/checkout@v2
-
-      # create test database
 
       - name: create data image
         id: create-image
@@ -46,12 +45,12 @@ jobs:
       - name: Migrate database schema
         uses: docker://redgate/sqlcompare
         with:
-          args: /IAgreeToTheEULA /scripts1:/github/workspace/sql-scripts /s2:${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} /db2:Todos /u2:${{ steps.create-container.outputs.dataContainerUsername }} "/p2:${{ steps.create-container.outputs.dataContainerPassword }}" /Synchronize /include:Identical
+          args: /IAgreeToTheEULA /scripts1:/github/workspace/state-based/sql-scripts /s2:${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} /db2:Todos /u2:${{ steps.create-container.outputs.dataContainerUsername }} "/p2:${{ steps.create-container.outputs.dataContainerPassword }}" /Synchronize /include:Identical
 
       - name: Migrate database data
         uses: docker://redgate/sqldatacompare
         with:
-          args: /IAgreeToTheEULA /scripts1:/github/workspace/sql-scripts /s2:${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} /db2:Todos /u2:${{ steps.create-container.outputs.dataContainerUsername }} "/p2:${{ steps.create-container.outputs.dataContainerPassword }}" /Synchronize /include:Identical
+          args: /IAgreeToTheEULA /scripts1:/github/workspace/state-based/sql-scripts /s2:${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} /db2:Todos /u2:${{ steps.create-container.outputs.dataContainerUsername }} "/p2:${{ steps.create-container.outputs.dataContainerPassword }}" /Synchronize /include:Identical
 
       - name: Get current date
         id: date
@@ -82,12 +81,12 @@ jobs:
       - name: Deploy database schema
         uses: docker://redgate/sqlcompare
         with:
-          args: /IAgreeToTheEULA /scripts1:/github/workspace/sql-scripts /s2:${{ secrets.DEPLOYDB_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEPLOYDB_USERNAME }} "/p2:${{ secrets.DEPLOYDB_PASSWORD }}" /Synchronize /include:Identical
+          args: /IAgreeToTheEULA /scripts1:/github/workspace/state-based/sql-scripts /s2:${{ secrets.DEPLOYDB_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEPLOYDB_USERNAME }} "/p2:${{ secrets.DEPLOYDB_PASSWORD }}" /Synchronize /include:Identical
 
       - name: Deploy database data
         uses: docker://redgate/sqldatacompare
         with:
-          args: /IAgreeToTheEULA /scripts1:/github/workspace/sql-scripts /s2:${{ secrets.DEPLOYDB_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEPLOYDB_USERNAME }} "/p2:${{ secrets.DEPLOYDB_PASSWORD }}" /Synchronize /include:Identical
+          args: /IAgreeToTheEULA /scripts1:/github/workspace/state-based/sql-scripts /s2:${{ secrets.DEPLOYDB_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEPLOYDB_USERNAME }} "/p2:${{ secrets.DEPLOYDB_PASSWORD }}" /Synchronize /include:Identical
 
       - name: Deploy version details
         uses: docker://mcr.microsoft.com/mssql-tools

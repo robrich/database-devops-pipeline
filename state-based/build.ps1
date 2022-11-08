@@ -5,10 +5,25 @@ $env:SA_PASSWORD = "p5ssw@rd"
 
 #
 echo "starting local database server"
+Start-Process -NoNewWindow docker-compose up
 
-docker-compose up -d
-
-sleep 80 # wait for database to start
+#sleep 80 # wait for database to start
+Write-Host "waiting for database to start..." -NoNewLine
+$ready = $false
+while (!$ready) {
+  try {
+    docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -b -Q "SELECT * FROM sys.databases" > $null 2> $null
+    if ($?) {
+      $ready = true
+      break
+    }
+  } catch {
+    $ready = false
+  }
+  sleep 1
+  Write-Host "." -NoNewLine
+}
+echo ""
 
 #
 echo "create test database"
@@ -35,8 +50,8 @@ echo "run app tests against database"
 
 docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
-docker build -t app-tests app-tests
-docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=${env:SA_PASSWORD};" app-tests
+docker build -t app-tests ../app-tests
+docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=${env:SA_PASSWORD};Encrypt=False" app-tests
 
 #
 echo "clean up"
@@ -46,7 +61,10 @@ docker-compose down
 #
 echo "deploy"
 
-Read-Host "Push any key to deploy"
+if (!$deploydb_database || !$deploydb_server || !$deploydb_username || $deploydb_password) {
+  echo "can't deploy because deploy variables not set"
+  exit 1
+}
 
 docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$deploydb_server /db2:$deploydb_database /u2:$deploydb_username "/p2:$deploydb_password" /Synchronize /include:Identical
 

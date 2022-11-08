@@ -1,8 +1,9 @@
-name: Build Database Interim
+name: State-based Database DevOps Pipeline (interim)
 
 # This is an interim step from on-prem build script to GitHub Actions build
 
 on:
+# commented out for demo purposes:
 #  push:
 #    branches:
 #    - main
@@ -50,9 +51,9 @@ jobs:
           echo "=============================================="
           echo "migrate it into place"
 
-          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
+          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
 
-          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
+          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
 
           echo "=============================================="
           echo "version assets"
@@ -71,9 +72,9 @@ jobs:
           echo "=============================================="
           echo "deploy"
 
-          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
+          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
 
-          docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
+          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
 
           docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
           docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -b -Q "UPDATE dbo.Setting SET Value = '$(git rev-parse --short HEAD)' WHERE Name = 'Git Hash';"
