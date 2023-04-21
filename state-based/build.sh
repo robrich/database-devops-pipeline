@@ -12,7 +12,7 @@ docker-compose up &
 echo -n "waiting for database to start..."
 ready=false
 until [ "$ready" = true ]; do
-  docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $SA_PASSWORD -b -Q "SELECT * FROM sys.databases" > /dev/null 2>&1 && ready=true
+  docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $SA_PASSWORD -C -b -Q "SELECT * FROM sys.databases" > /dev/null 2>&1 && ready=true
   sleep 1
   echo -n "."
 done
@@ -41,7 +41,7 @@ echo "run app tests against database"
 
 docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $SA_PASSWORD -d Todos -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
-docker build -t app-tests ../app-tests
+docker build --target test -t app-tests ../app-tests
 docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=$SA_PASSWORD;Encrypt=False" app-tests
 
 #

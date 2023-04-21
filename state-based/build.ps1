@@ -12,7 +12,7 @@ Write-Host "waiting for database to start..." -NoNewLine
 $ready = $false
 while (!$ready) {
   try {
-    docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -b -Q "SELECT * FROM sys.databases" > $null 2> $null
+    docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -C -b -Q "SELECT * FROM sys.databases" > $null 2> $null
     if ($?) {
       $ready = true
       break
@@ -28,7 +28,7 @@ echo ""
 #
 echo "create test database"
 
-docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
+docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -C -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
 
 #
 echo "migrate test database from empty to current version"
@@ -41,16 +41,16 @@ docker run --rm --link db -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqld
 echo "version assets"
 
 $dateval = $(Get-Date -Format 'yyyy-MM-dd')
-docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -b -Q "UPDATE dbo.Setting SET Value = '$dateval' WHERE Name = 'Build Date';"
+docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '$dateval' WHERE Name = 'Build Date';"
 $githash = $(git rev-parse --short HEAD)
-docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -b -Q "UPDATE dbo.Setting SET Value = '$githash' WHERE Name = 'Git Hash';"
+docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '$githash' WHERE Name = 'Git Hash';"
 
 #
 echo "run app tests against database"
 
-docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
+docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
-docker build -t app-tests ../app-tests
+docker build --target test -t app-tests ../app-tests
 docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=${env:SA_PASSWORD};Encrypt=False" app-tests
 
 #
@@ -74,4 +74,4 @@ docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare
 echo "version assets"
 
 $dateval = $(Get-Date -Format 'yyyy-MM-dd')
-docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $deploydb_server -U $deploydb_username -P $deploydb_password -d $deploydb_database -b -Q "UPDATE dbo.Setting SET Value = '$dateval' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '$githash' WHERE Name = 'Git Hash';"
+docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $deploydb_server -U $deploydb_username -P $deploydb_password -d $deploydb_database -C -b -Q "UPDATE dbo.Setting SET Value = '$dateval' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '$githash' WHERE Name = 'Git Hash';"

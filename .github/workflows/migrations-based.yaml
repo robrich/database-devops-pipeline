@@ -38,7 +38,7 @@ jobs:
         uses: docker://mcr.microsoft.com/mssql-tools
         with:
           entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
+          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -C -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
 
       # migrate test database from empty to current version
 
@@ -57,7 +57,7 @@ jobs:
         uses: docker://mcr.microsoft.com/mssql-tools
         with:
           entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
 
       # run app tests against database
 
@@ -65,11 +65,11 @@ jobs:
         uses: docker://mcr.microsoft.com/mssql-tools
         with:
           entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
+          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
       - name: Build and test app
         run: |
-          docker build -t app-tests app-tests
+          docker build --target test -t app-tests app-tests
           docker run -e "ConnectionStrings__DatabaseDevOps=Server=${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }};Database=Todos;User ID=${{ steps.create-container.outputs.dataContainerUsername }};Password=${{ steps.create-container.outputs.dataContainerPassword }};" app-tests
 
       # build succeeded!
@@ -86,7 +86,7 @@ jobs:
         uses: docker://mcr.microsoft.com/mssql-tools
         with:
           entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ secrets.DEPLOYDB_SERVER }} -U ${{ secrets.DEPLOYDB_USERNAME }} -P ${{ secrets.DEPLOYDB_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+          args: -S ${{ secrets.DEPLOYDB_SERVER }} -U ${{ secrets.DEPLOYDB_USERNAME }} -P ${{ secrets.DEPLOYDB_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -C -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
 
       # cleanup
 
