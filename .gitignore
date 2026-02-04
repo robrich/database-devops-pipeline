@@ -1,8 +1,14 @@
-*.sdcs
-*.txt
-*.failed
+# downloaded files
+# built files
 bin
 obj
+*.txt
+*.failed
+test-results
+# user-specific files
 *.user
 *.suo
 .vs
+*.sdcs
+# temporary files
+# secrets

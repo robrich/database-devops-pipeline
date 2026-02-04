@@ -1,9 +1,8 @@
-﻿namespace DatabaseDevOps.Tests.SuiteUnderTest
+﻿namespace DatabaseDevOps.Tests.SuiteUnderTest;
+
+public enum TaskStatus
 {
-	public enum TaskStatus
-	{
-		Open = 1,
-		Completed = 2,
-		Canceled = 3
-	}
+	Open = 1,
+	Completed = 2,
+	Canceled = 3
 }

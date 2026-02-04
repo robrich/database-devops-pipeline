@@ -1,7 +1,16 @@
 
 $ErrorActionPreference = "Stop"
+#Set-PSDebug -Trace 1
 
 $env:SA_PASSWORD = "p5ssw@rd"
+
+# TODO: $env:REDGATE_AUTH_TOKEN = "..."
+# TODO: $env:REDGATE_AUTH_EMAIL = "..."
+if (-not $env:REDGATE_AUTH_TOKEN -or -not $env:REDGATE_AUTH_EMAIL) {
+  Write-Error "Please set REDGATE_AUTH_TOKEN and REDGATE_AUTH_EMAIL environment variables"
+  Write-Error "See https://documentation.red-gate.com/authentication/personal-access-tokens-pats"
+  exit 1
+}
 
 #
 echo "starting local database server"
@@ -33,9 +42,9 @@ docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/
 #
 echo "migrate test database from empty to current version"
 
-docker run --rm --link db -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:db /db2:Todos /u2:sa "/p2:$env:SA_PASSWORD" /Synchronize /include:Identical
+docker run --rm --link db -v "${PWD}/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /token:"$env:REDGATE_AUTH_TOKEN" /email:"$env:REDGATE_AUTH_EMAIL" /scripts1:/data/sql-scripts /s2:db /db2:Todos /u2:sa "/p2:$env:SA_PASSWORD" /Synchronize /include:Identical
 
-docker run --rm --link db -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:db /db2:Todos /u2:sa "/p2:$env:SA_PASSWORD" /Synchronize /include:Identical
+docker run --rm --link db -v "${PWD}/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /token:"$env:REDGATE_AUTH_TOKEN" /email:"$env:REDGATE_AUTH_EMAIL" /scripts1:/data/sql-scripts /s2:db /db2:Todos /u2:sa "/p2:$env:SA_PASSWORD" /Synchronize /include:Identical
 
 #
 echo "version assets"
@@ -51,7 +60,7 @@ echo "run app tests against database"
 docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $env:SA_PASSWORD -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
 docker build --target test -t app-tests ../app-tests
-docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=${env:SA_PASSWORD};Encrypt=False" app-tests
+docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=${env:SA_PASSWORD};TrustServerCertificate=True" -v "${PWD}/test-results:/src/test-results" app-tests
 
 #
 echo "clean up"
@@ -66,9 +75,9 @@ if (!$deploydb_database || !$deploydb_server || !$deploydb_username || $deploydb
   exit 1
 }
 
-docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$deploydb_server /db2:$deploydb_database /u2:$deploydb_username "/p2:$deploydb_password" /Synchronize /include:Identical
+docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /token:"$env:REDGATE_AUTH_TOKEN" /email:"$env:REDGATE_AUTH_EMAIL" /scripts1:/data/sql-scripts /s2:$deploydb_server /db2:$deploydb_database /u2:$deploydb_username "/p2:$deploydb_password" /Synchronize /include:Identical
 
-docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$deploydb_server /db2:$deploydb_database /u2:$deploydb_username "/p2:$deploydb_password" /Synchronize /include:Identical
+docker run --rm -v "$(pwd)/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /token:"$env:REDGATE_AUTH_TOKEN" /email:"$env:REDGATE_AUTH_EMAIL" /scripts1:/data/sql-scripts /s2:$deploydb_server /db2:$deploydb_database /u2:$deploydb_username "/p2:$deploydb_password" /Synchronize /include:Identical
 
 #
 echo "version assets"

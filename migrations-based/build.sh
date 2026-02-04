@@ -26,7 +26,7 @@ docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/
 #
 echo "migrate test database from empty to current version"
 
-docker run --rm --link db -v "$(pwd)/sql:/flyway/sql" flyway/flyway migrate -url=jdbc:jtds:sqlserver://db/Todos -user=sa -password=$SA_PASSWORD
+docker run --rm --link db -v "$(pwd)/sql:/flyway/sql" flyway/flyway migrate "-url=jdbc:sqlserver://db:1433;databaseName=Todos;encrypt=true;trustServerCertificate=true" "-user=sa" "-password=$SA_PASSWORD"
 
 #
 echo "version assets"
@@ -40,7 +40,7 @@ echo "run app tests against database"
 docker run --rm --link db:db mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S db -U sa -P $SA_PASSWORD -d Todos -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
 docker build --target test -t app-tests ../app-tests
-docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=$SA_PASSWORD;Encrypt=False" app-tests
+docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=db;Database=Todos;User ID=sa;Password=$SA_PASSWORD;TrustServerCertificate=True" -v "$(pwd)/test-results:/src/test-results" app-tests
 
 #
 echo "clean up"
@@ -55,7 +55,7 @@ if [ -z ${deploydb_database} ] || [ -z ${deploydb_server} ] || [ -z ${deploydb_u
   exit 1
 fi
 
-docker run --rm --link db -v "$(pwd)/sql:/flyway/sql" flyway/flyway migrate -url=jdbc:jtds:sqlserver://$deploydb_server/$deploydb_database -user=$deploydb_username -password=$SA_PASSWORD
+docker run --rm --link db -v "$(pwd)/sql:/flyway/sql" flyway/flyway migrate "-url=jdbc:sqlserver://$deploydb_server:1433;databaseName=$deploydb_database;encrypt=true" "-user=$deploydb_username" "-password=$deploydb_password"
 
 #
 echo "version assets"

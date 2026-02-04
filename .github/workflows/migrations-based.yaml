@@ -11,73 +11,95 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      DB_HOST: mssql
+      DB_USERNAME: sa
+      DB_PASSWORD: Password123!
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Password123! # Have to duplicate password here, GitHub limitation
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+
     steps:
 
       - uses: actions/checkout@v2
 
-      - name: create data image
-        id: create-image
-        uses: red-gate/create-spawn-data-image/@v1
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
-        with:
-          dataImageYaml: spawn/empty-mssql.yaml
-          lifetime: '10m'
-          tags: --name=${{ github.sha }}
+      - name: Get Docker network for Services
+        id: get_network
+        run: |
+          echo "getting GitHub Docker network"
+          GITHUB_NETWORK=$(docker network ls --format "{{.Name}}" | grep "github")
+          echo "GITHUB_NETWORK = $GITHUB_NETWORK"
+          echo "GITHUB_NETWORK=$GITHUB_NETWORK" >> $GITHUB_ENV
 
-      - name: create data container
-        id: create-container
-        uses: red-gate/create-spawn-data-container/@v1
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
-        with:
-          dataImage: ${{ steps.create-image.outputs.dataImageName }}
-          lifetime: '10m'
+      - name: Wait for mssql
+        run: |
+          echo -n "waiting for database to start..."
+          ready=false
+          until [ "$ready" = true ]; do
+            docker run --rm --network $GITHUB_NETWORK mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -C -b -Q "SELECT * FROM sys.databases" > /dev/null && ready=true
+            sleep 1
+            echo -n "."
+          done
+          echo ""
 
       - name: Create test database
-        uses: docker://mcr.microsoft.com/mssql-tools
-        with:
-          entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -C -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
+        run: |
+          docker run --rm --network $GITHUB_NETWORK mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -C -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
 
       # migrate test database from empty to current version
 
-      - uses: joshuaavalon/flyway-action@v1
-        with:
-          url: jdbc:jtds:sqlserver://${{ steps.create-container.outputs.dataContainerHost }}:${{ steps.create-container.outputs.dataContainerPort }}/Todos;ssl=request
-          user: ${{ steps.create-container.outputs.dataContainerUsername }}
-          password: ${{ steps.create-container.outputs.dataContainerPassword }}
-          locations: filesystem:./migrations-based/sql
+      - name: Run Flyway migrate
+        run: |
+          docker run --rm --network $GITHUB_NETWORK -v "./migrations-based/sql:/flyway/sql" flyway/flyway "-url=jdbc:sqlserver://$DB_HOST:1433;databaseName=Todos;encrypt=true;trustServerCertificate=true" "-user=$DB_USERNAME" "-password=$DB_PASSWORD" migrate
 
       - name: Get current date
         id: date
-        run: echo "::set-output name=date::$(date +'%Y-%m-%d')"
+        run: echo "date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
 
       - name: Version assets
-        uses: docker://mcr.microsoft.com/mssql-tools
-        with:
-          entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+        run: |
+          docker run --rm --network $GITHUB_NETWORK mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
 
       # run app tests against database
 
       - name: Run integration queries
-        uses: docker://mcr.microsoft.com/mssql-tools
-        with:
-          entrypoint: /opt/mssql-tools/bin/sqlcmd
-          args: -S ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }} -U ${{ steps.create-container.outputs.dataContainerUsername }} -P ${{ steps.create-container.outputs.dataContainerPassword }} -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
+        run: |
+          docker run --rm --network $GITHUB_NETWORK mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
       - name: Build and test app
         run: |
           docker build --target test -t app-tests app-tests
-          docker run -e "ConnectionStrings__DatabaseDevOps=Server=${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }};Database=Todos;User ID=${{ steps.create-container.outputs.dataContainerUsername }};Password=${{ steps.create-container.outputs.dataContainerPassword }};" app-tests
+          docker run --network $GITHUB_NETWORK -e "ConnectionStrings__DatabaseDevOps=Server=$DB_HOST;Database=Todos;User ID=$DB_USERNAME;Password=$DB_PASSWORD;TrustServerCertificate=True;" -v "./test-results:/src/test-results" app-tests
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: ./test-results
+        if: always()
+
+      - name: Test report
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always() # even if tests fail
+        with:
+          files: |
+            test-results/*.xml
+          check_run_annotations_branch: '*'
+        # Test result and annotations in the wrong build: https://github.com/EnricoMi/publish-unit-test-result-action/issues/12
 
       # build succeeded!
       # deploy to target server
 
       - uses: joshuaavalon/flyway-action@v1
         with:
-          url: jdbc:jtds:sqlserver://${{ secrets.DEPLOYDB_SERVER }}/${{ secrets.DEPLOYDB_DATABASE }};ssl=request
+          url: jdbc:sqlserver://${{ secrets.DEPLOYDB_SERVER }}:1433;databaseName=${{ secrets.DEPLOYDB_DATABASE }};encrypt=true
           user: ${{ secrets.DEPLOYDB_USERNAME }}
           password: ${{ secrets.DEPLOYDB_PASSWORD }}
           locations: filesystem:./migrations-based/sql
@@ -87,21 +109,3 @@ jobs:
         with:
           entrypoint: /opt/mssql-tools/bin/sqlcmd
           args: -S ${{ secrets.DEPLOYDB_SERVER }} -U ${{ secrets.DEPLOYDB_USERNAME }} -P ${{ secrets.DEPLOYDB_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -C -b -Q "UPDATE dbo.Setting SET Value = '${{ steps.date.outputs.date }}' WHERE Name = 'Build Date'; UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
-
-      # cleanup
-
-      - name: delete data container
-        uses: red-gate/delete-spawn-data-container/@v1
-        if: always()
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
-        with:
-          dataContainer: ${{ steps.create-container.outputs.dataContainerName }}
-
-      - name: delete data image
-        uses: red-gate/delete-spawn-data-image/@v1
-        if: always()
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
-        with:
-          dataImage: ${{ steps.create-image.outputs.dataImageName }}

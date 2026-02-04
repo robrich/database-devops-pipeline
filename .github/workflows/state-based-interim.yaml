@@ -13,84 +13,93 @@ jobs:
   build:
     runs-on: ubuntu-latest
 
+    env:
+      DB_HOST: mssql
+      DB_USERNAME: sa
+      DB_PASSWORD: Password123!
+
+    services:
+      mssql:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: Y
+          MSSQL_SA_PASSWORD: Password123! # Have to duplicate password here, GitHub limitation
+          MSSQL_PID: Developer
+        ports:
+          - 1433:1433
+
     steps:
 
       - uses: actions/checkout@v2
 
-      - name: create data image
-        id: create-image
-        uses: red-gate/create-spawn-data-image/@v1
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
-        with:
-          dataImageYaml: spawn/empty-mssql.yaml
-          lifetime: '10m'
-
-      - name: create data container
-        id: create-container
-        uses: red-gate/create-spawn-data-container/@v1
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
-        with:
-          dataImage: ${{ steps.create-image.outputs.dataImageName }}
-          lifetime: '10m'
-
       - name: build fake database and test it
-        env:
-          DB_HOST: ${{ steps.create-container.outputs.dataContainerHost }},${{ steps.create-container.outputs.dataContainerPort }}
-          DB_USERNAME: ${{ steps.create-container.outputs.dataContainerUsername }}
-          DB_PASSWORD: ${{ steps.create-container.outputs.dataContainerPassword }}
         run: |
+
+          echo "=============================================="
+          echo "Get Docker network for Services"
+          github_network=$(docker network ls --format "{{.Name}}" | grep "github")
+          docker network ls
+          echo "github_network = $github_network"
+
+          echo "=============================================="
+          echo -n "waiting for database to start..."
+          ready=false
+          until [ "$ready" = true ]; do
+            docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -C -b -Q "SELECT * FROM sys.databases" > /dev/null && ready=true
+            sleep 1
+            echo -n "."
+          done
+          echo ""
 
           echo "=============================================="
           echo "create test database"
 
           # sqlcmd is installed on the runner, so could do `sqlcmd -S $DB_HOST ...`
-          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -C -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
+          docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -C -b -Q "IF NOT EXISTS(SELECT * FROM sys.databases WHERE name = 'Todos') BEGIN; CREATE DATABASE Todos; END;"
 
           echo "=============================================="
           echo "migrate it into place"
 
-          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
+          docker run --rm --network $github_network -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /token:"${{ secrets.REDGATE_AUTH_TOKEN }}" /email:"${{ secrets.REDGATE_AUTH_EMAIL }}" /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
 
-          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
+          docker run --rm --network $github_network -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /token:"${{ secrets.REDGATE_AUTH_TOKEN }}" /email:"${{ secrets.REDGATE_AUTH_EMAIL }}" /scripts1:/data/sql-scripts /s2:$DB_HOST /db2:Todos /u2:$DB_USERNAME "/p2:$DB_PASSWORD" /Synchronize /include:Identical
 
           echo "=============================================="
           echo "version assets"
 
-          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
-          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
+          docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
+          docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "UPDATE dbo.Setting SET Value = '${{ github.sha }}' WHERE Name = 'Git Hash';"
 
           echo "=============================================="
           echo "run integration tests"
 
-          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
+          docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S $DB_HOST -U $DB_USERNAME -P $DB_PASSWORD -d Todos -C -b -Q "SELECT * FROM dbo.TaskStatus; SELECT * FROM dbo.Setting;"
 
           docker build --target test -t app-tests app-tests
-          docker run --rm --link db -e ConnectionStrings__DatabaseDevOps="Server=$DB_HOST;Database=Todos;User ID=$DB_USERNAME;Password=$DB_PASSWORD;" app-tests
+          docker run --rm --network $github_network -e ConnectionStrings__DatabaseDevOps="Server=$DB_HOST;Database=Todos;User ID=$DB_USERNAME;Password=$DB_PASSWORD;TrustServerCertificate=True;" -v "./test-results:/src/test-results" app-tests
 
           echo "=============================================="
           echo "deploy"
 
-          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
+          docker run --rm --network $github_network -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqlcompare /IAgreeToTheEULA /token:"${{ secrets.REDGATE_AUTH_TOKEN }}" /email:"${{ secrets.REDGATE_AUTH_EMAIL }}" /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
 
-          docker run --rm -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
+          docker run --rm --network $github_network -v "$(pwd)/state-based/sql-scripts:/data/sql-scripts" redgate/sqldatacompare /IAgreeToTheEULA /token:"${{ secrets.REDGATE_AUTH_TOKEN }}" /email:"${{ secrets.REDGATE_AUTH_EMAIL }}" /scripts1:/data/sql-scripts /s2:${{ secrets.DEST_SERVER }} /db2:${{ secrets.DEPLOYDB_DATABASE }} /u2:${{ secrets.DEST_USERNAME }} "/p2:${{ secrets.DEST_PASSWORD }}" /Synchronize /include:Identical
 
-          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -C -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
-          docker run --rm mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -C -b -Q "UPDATE dbo.Setting SET Value = '$(git rev-parse --short HEAD)' WHERE Name = 'Git Hash';"
+          docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -C -b -Q "UPDATE dbo.Setting SET Value = '$(date --iso-8601)' WHERE Name = 'Build Date';"
+          docker run --rm --network $github_network mcr.microsoft.com/mssql-tools /opt/mssql-tools/bin/sqlcmd -S ${{ secrets.DEST_SERVER }} -U ${{ secrets.DEST_USERNAME }} -P ${{ secrets.DEST_PASSWORD }} -d ${{ secrets.DEPLOYDB_DATABASE }} -C -b -Q "UPDATE dbo.Setting SET Value = '$(git rev-parse --short HEAD)' WHERE Name = 'Git Hash';"
 
-      - name: delete data container
-        uses: red-gate/delete-spawn-data-container/@v1
-        if: always()
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
         with:
-          dataContainer: ${{ steps.create-container.outputs.dataContainerName }}
-
-      - name: delete data image
-        uses: red-gate/delete-spawn-data-image/@v1
+          name: test-results
+          path: ./test-results
         if: always()
-        env:
-          SPAWNCTL_ACCESS_TOKEN: ${{ secrets.SPAWNCTL_ACCESS_TOKEN }}
+
+      - name: Test report
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always() # even if tests fail
         with:
-          dataImage: ${{ steps.create-image.outputs.dataImageName }}
+          files: |
+            test-results/*.xml
+          check_run_annotations_branch: '*'
+        # Test result and annotations in the wrong build: https://github.com/EnricoMi/publish-unit-test-result-action/issues/12
