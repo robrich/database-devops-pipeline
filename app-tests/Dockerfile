@@ -14,7 +14,7 @@ RUN dotnet publish -c Release --no-restore -o /dist DatabaseDevOps.Tests.csproj
 # Test container
 FROM build AS test
 ENV ConnectionStrings__DatabaseDevOps=""
-CMD ["dotnet", "test", "-c", "Release", "--no-build", "--logger", "junit;LogFilePath=/src/test-results/testresults.xml"]
+CMD ["dotnet", "test", "-c", "Release", "--no-build", "--logger", "junit;LogFilePath=/src/test-results/testresults.xml", "DatabaseDevOps.sln"]
 
 
 # Production runtime container
